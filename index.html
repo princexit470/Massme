@@ -11,7 +11,6 @@
     <script src="api.js"></script>
     
     <style>
-        /* Aapka Pura Original CSS Same to Same */
         :root { --bg-dark: #0a0f18; --panel-bg: rgba(15, 20, 30, 0.85); --panel-solid: #121824; --primary: #00e5ff; --primary-glow: rgba(0, 229, 255, 0.4); --sent-bubble: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); --recv-bubble: #1a2233; --text-main: #f8fafc; --danger: #ff4757; --blur: blur(15px); }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; font-family: 'Outfit', sans-serif; }
         body, html { margin: 0; padding: 0; height: 100%; width: 100%; max-width: 100vw; background: var(--bg-dark); color: var(--text-main); overflow: hidden; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none; }
@@ -61,7 +60,7 @@
         .icon-btn { background: transparent; border: none; fill: var(--primary); width: 35px; height: 35px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; }
         .icon-btn:active { transform: scale(0.9); } .icon-btn svg { width: 22px; height: 22px; }
 
-        .msg-flow { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; scroll-behavior: auto; }
+        .msg-flow { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; scroll-behavior: auto; /* Smooth scroll disabled for instant jump */ }
         .msg-wrapper { display:flex; align-items:center; width:100%; position:relative; overflow: hidden; flex-shrink: 0;}
         .sent-wrap { justify-content:flex-end; } .recv-wrap { justify-content:flex-start; }
 
@@ -241,12 +240,7 @@
             <div class="menu-item" onclick="showCallHistory()"><span>📞</span> Call History</div>
             <div class="menu-item" onclick="showChatBgSettings()"><span>🖼️</span> Chat Background</div>
             <div class="menu-item" onclick="showChangePass()"><span>🔑</span> Change Password</div>
-            
-            <!-- PWA Download Button -->
-            <div class="menu-item" onclick="downloadPWA()">
-                <span>⬇️</span> Download App
-            </div>
-            
+            <div class="menu-item" onclick="downloadPWA()"><span>⬇️</span> Download App</div>
             <div class="menu-item" style="color: var(--danger); margin-top:20px;" onclick="logout()"><span>🚪</span> Logout</div>
         </div>
     </div>
@@ -353,13 +347,9 @@
         function notifyUser(title, body) {
             if (navigator.vibrate) { navigator.vibrate([200, 100, 200, 100, 200]); }
             if ("Notification" in window && Notification.permission === "granted") {
-                if (navigator.serviceWorker.controller) {
-                    navigator.serviceWorker.ready.then(registration => {
-                        registration.showNotification(title, { body: body, icon: 'https://cdn-icons-png.flaticon.com/512/1041/1041916.png', vibrate: [200, 100, 200] });
-                    });
-                } else {
-                    new Notification(title, { body: body, icon: 'https://cdn-icons-png.flaticon.com/512/1041/1041916.png' });
-                }
+                navigator.serviceWorker.ready.then(registration => {
+                    registration.showNotification(title, { body: body, icon: 'https://cdn-icons-png.flaticon.com/512/1041/1041916.png', vibrate: [200, 100, 200] });
+                });
             }
         }
 
@@ -450,7 +440,7 @@
         function escapeHTML(str) { if(typeof str !== 'string') return str; return str.replace(/[&<>'"]/g, function(tag) { const chars = { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }; return chars[tag] || tag; }); }
         function urlify(text) { text = escapeHTML(text); const urlRegex = /(https?:\/\/[^\s]+)/g; return text.replace(urlRegex, function(url) { return `<a href="${url}" target="_blank" onclick="event.stopPropagation()">${url}</a>`; }); }
 
-        // --- CHAT LOGIC WITH LOCAL CACHING & NO RELOAD ---
+        // --- CHAT LOGIC WITH OPTIMIZED RENDERING ---
         function openChat(room, name, type='normal') {
             if(activeRoom) { db.ref('messages/'+activeRoom).off(); db.ref('private_messages/'+activeRoom).off(); cancelReply(); }
             document.getElementById('msg-flow').innerHTML = ""; 
@@ -473,11 +463,12 @@
             // 1. Load from Local Storage instantly
             let cachedData = JSON.parse(localStorage.getItem(cacheKey));
             if (cachedData) {
-                renderMessages(Object.values(cachedData), type);
+                renderAllMessages(Object.values(cachedData), type);
                 setTimeout(() => { document.getElementById('msg-flow').scrollTop = document.getElementById('msg-flow').scrollHeight; }, 10);
             }
 
-            let isInitialLoad = !cachedData; // Scroll only if no cache
+            let isInitialLoad = !cachedData; 
+            let lastRenderedKey = null;
 
             // 2. Fetch from Firebase and update cache incrementally
             db.ref(refPath).on('value', snap => {
@@ -485,39 +476,41 @@
                 let messagesArr = [];
                 snap.forEach(ms => { let m = ms.val(); m.key = ms.key; messagesArr.push(m); });
                 
-                // Save to local device
                 localStorage.setItem(cacheKey, JSON.stringify(messagesArr));
+                messagesArr.sort((a, b) => a.ts - b.ts);
 
-                // Append only new messages to avoid full reload
                 const flow = document.getElementById('msg-flow');
-                const lastMsgKey = flow.lastElementChild ? flow.lastElementChild.id.replace('msg-wrap-', '') : null;
-                let lastMsgIndex = messagesArr.findIndex(m => m.key === lastMsgKey);
-
-                if (lastMsgIndex === -1 || messagesArr.length <= (lastMsgIndex + 1)) {
-                    // No new messages, or all messages are already loaded
-                    if (isInitialLoad) {
-                        renderMessages(messagesArr, type);
-                        setTimeout(() => { flow.scrollTop = flow.scrollHeight; isInitialLoad = false; }, 50);
-                    }
+                
+                // Add only new messages without clearing old ones
+                if (isInitialLoad || messagesArr.length === 0) {
+                    renderAllMessages(messagesArr, type);
+                    setTimeout(() => { flow.scrollTop = flow.scrollHeight; isInitialLoad = false; }, 50);
                 } else {
-                    // New messages arrived
-                    for (let i = lastMsgIndex + 1; i < messagesArr.length; i++) {
-                        renderSingleMessage(messagesArr[i], type, flow);
+                    if (messagesArr.length > 0) {
+                        const lastMsg = messagesArr[messagesArr.length - 1];
+                        if (lastMsg.key !== lastRenderedKey) {
+                            renderSingleMessage(lastMsg, type, flow);
+                            if (flow.scrollHeight - flow.scrollTop < 300) {
+                                flow.scrollTop = flow.scrollHeight;
+                            }
+                            lastRenderedKey = lastMsg.key;
+                        }
                     }
-                    flow.scrollTop = flow.scrollHeight;
                 }
                 window.lastRead[room] = Date.now(); localStorage.setItem('xit_reads', JSON.stringify(window.lastRead));
             });
         }
 
-        function renderMessages(messagesArr, type) {
+        function renderAllMessages(messagesArr, type) {
             const flow = document.getElementById('msg-flow'); 
             flow.innerHTML = "";
-            messagesArr.sort((a, b) => a.ts - b.ts);
             messagesArr.forEach(m => renderSingleMessage(m, type, flow));
+            setTimeout(() => { flow.scrollTop = flow.scrollHeight; }, 10);
         }
 
         function renderSingleMessage(m, type, container) {
+            if (document.getElementById('msg-wrap-' + m.key)) return; // Skip if already exists
+
             const wrap = document.createElement('div'); wrap.className = `msg-wrapper ${m.from === myUser ? 'sent-wrap' : 'recv-wrap'}`; wrap.id = `msg-wrap-${m.key}`;
             const bubble = document.createElement('div'); bubble.className = `bubble ${m.from === myUser ? 'sent' : 'recv'}`;
             
@@ -653,7 +646,7 @@
             toggleSidebar(false); db.ref(`call_history/${myUser}`).once('value', snap => { let html = `<div style="text-align:left; max-height: 60vh; overflow-y: auto; padding-right: 5px;">`; let data = []; if(snap.exists()) { snap.forEach(s => { data.push(s.val()) }); } data.sort((a,b) => b.ts - a.ts); if(data.length === 0) { html += `<p style="text-align:center; color:#777; padding: 20px 0;">No logs found in call history.</p>`; } data.forEach(c => { let d = new Date(c.ts); let timeStr = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); let icon = c.type === 'video' ? '📹' : '📞'; let col = c.status === 'missed' ? 'var(--danger)' : c.status === 'outgoing' ? 'var(--primary)' : '#38ef7d'; let arrow = c.status === 'missed' ? '↙️ Missed' : c.status === 'outgoing' ? '↗️ Outgoing' : '↙️ Received'; html += `<div class="history-row" style="margin-bottom:10px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); border-radius:15px; display:flex; align-items:center; padding:15px;"><div style="font-size:26px; margin-right:15px; color:${col}">${icon}</div><div style="flex:1;"><b style="color:${col}; font-size:16px;">${c.peer}</b><br><small style="color:#aaa;">${arrow}</small></div><div style="font-size:11px; color:#888; text-align:right;">${timeStr}</div></div>`; }); html += `</div>`; showModal("📞 Call History", html, null, false); }); 
         }
 
-        // --- CALLING LOGIC (Fixed Lag & Vibration) ---
+        // --- CALLING LOGIC (Fixed) ---
         const iceServers = { iceServers: [{ urls: 'stun:stun1.l.google.com:19302' }, { urls: 'stun:stun2.l.google.com:19302' }]};
         let pc = null; let localStream = null; let remoteStream = null; let currentCallRef = null; 
         let isVideoCall = false; let incomingCallObj = null; let isFrontCamera = true; let isSpeakerOn = true; 
@@ -697,10 +690,8 @@
                 if(snap.exists() && !pc) { 
                     if(!incomingCallObj) { 
                         incomingCallObj = snap.val(); 
-                        
                         if (navigator.vibrate) { navigator.vibrate([1000, 500, 1000, 500, 1000, 500, 1000]); }
                         notifyUser("Incoming Call", `Call from ${incomingCallObj.caller}`); 
-                        
                         let pCallLayer = document.getElementById('premium-call-layer'); pCallLayer.style.display = 'flex';
                         try { let cName = incomingCallObj.caller || "Unknown"; document.getElementById('p-call-avatar').innerText = cName.charAt(0).toUpperCase(); document.getElementById('p-call-username').innerText = cName; document.getElementById('p-call-type').innerText = `INCOMING ${incomingCallObj.type ? incomingCallObj.type.toUpperCase() : 'VOICE'} CALL`; } catch(e) { console.error(e); }
                     }
@@ -738,15 +729,7 @@
             } catch(e) { console.error(e); alert("Camera/Mic Permission Denied! Check browser settings."); rejectCall(); }
         }
 
-        function rejectCall() { 
-            document.getElementById('premium-call-layer').style.display = 'none'; 
-            if(incomingCallObj) { 
-                db.ref(`calls_signaling/${incomingCallObj.callId}/status`).set('ended'); 
-                db.ref(`incoming_calls/${myUser}`).remove(); 
-                saveCallHistory(incomingCallObj.caller, incomingCallObj.type, 'missed'); 
-                incomingCallObj = null; 
-            } 
-        }
+        function rejectCall() { document.getElementById('premium-call-layer').style.display = 'none'; if(incomingCallObj) { db.ref(`calls_signaling/${incomingCallObj.callId}/status`).set('ended'); db.ref(`incoming_calls/${myUser}`).remove(); saveCallHistory(incomingCallObj.caller, incomingCallObj.type, 'missed'); incomingCallObj = null; } }
         function endCall() { if(currentCallRef) currentCallRef.child('status').set('ended'); else endCallLocal(); }
 
         function endCallLocal() { 
