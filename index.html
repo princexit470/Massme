@@ -8,10 +8,10 @@
     <link rel="manifest" href="manifest.json">
     <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
-    <!-- Yahan dhyaan dein: Agar GitHub par file ka naam apis.js hai to isko apis.js kar dein -->
     <script src="api.js"></script>
     
     <style>
+        /* Aapka Pura Original CSS Same to Same */
         :root { --bg-dark: #0a0f18; --panel-bg: rgba(15, 20, 30, 0.85); --panel-solid: #121824; --primary: #00e5ff; --primary-glow: rgba(0, 229, 255, 0.4); --sent-bubble: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); --recv-bubble: #1a2233; --text-main: #f8fafc; --danger: #ff4757; --blur: blur(15px); }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; font-family: 'Outfit', sans-serif; }
         body, html { margin: 0; padding: 0; height: 100%; width: 100%; max-width: 100vw; background: var(--bg-dark); color: var(--text-main); overflow: hidden; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none; }
@@ -61,7 +61,7 @@
         .icon-btn { background: transparent; border: none; fill: var(--primary); width: 35px; height: 35px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; }
         .icon-btn:active { transform: scale(0.9); } .icon-btn svg { width: 22px; height: 22px; }
 
-        .msg-flow { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; scroll-behavior: auto; /* Auto-scroll animation removed */ }
+        .msg-flow { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; scroll-behavior: auto; }
         .msg-wrapper { display:flex; align-items:center; width:100%; position:relative; overflow: hidden; flex-shrink: 0;}
         .sent-wrap { justify-content:flex-end; } .recv-wrap { justify-content:flex-start; }
 
@@ -351,13 +351,15 @@
         }
 
         function notifyUser(title, body) {
-            // Phone Vibration (WhatsApp Style)
             if (navigator.vibrate) { navigator.vibrate([200, 100, 200, 100, 200]); }
-            // Notification
             if ("Notification" in window && Notification.permission === "granted") {
-                navigator.serviceWorker.ready.then(registration => {
-                    registration.showNotification(title, { body: body, icon: 'https://cdn-icons-png.flaticon.com/512/1041/1041916.png', vibrate: [200, 100, 200] });
-                });
+                if (navigator.serviceWorker.controller) {
+                    navigator.serviceWorker.ready.then(registration => {
+                        registration.showNotification(title, { body: body, icon: 'https://cdn-icons-png.flaticon.com/512/1041/1041916.png', vibrate: [200, 100, 200] });
+                    });
+                } else {
+                    new Notification(title, { body: body, icon: 'https://cdn-icons-png.flaticon.com/512/1041/1041916.png' });
+                }
             }
         }
 
@@ -448,7 +450,7 @@
         function escapeHTML(str) { if(typeof str !== 'string') return str; return str.replace(/[&<>'"]/g, function(tag) { const chars = { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }; return chars[tag] || tag; }); }
         function urlify(text) { text = escapeHTML(text); const urlRegex = /(https?:\/\/[^\s]+)/g; return text.replace(urlRegex, function(url) { return `<a href="${url}" target="_blank" onclick="event.stopPropagation()">${url}</a>`; }); }
 
-        // --- CHAT LOGIC (No Auto-Scroll bug fixed, Opens at Latest) ---
+        // --- CHAT LOGIC WITH LOCAL CACHING & NO RELOAD ---
         function openChat(room, name, type='normal') {
             if(activeRoom) { db.ref('messages/'+activeRoom).off(); db.ref('private_messages/'+activeRoom).off(); cancelReply(); }
             document.getElementById('msg-flow').innerHTML = ""; 
@@ -466,49 +468,80 @@
 
             chatWin.classList.add('open'); history.pushState({page: 'chat'}, "");
             const refPath = type === 'private' ? 'private_messages/'+room : 'messages/'+room;
-            
-            let isInitialLoad = true; // Auto-scroll only on first open
+            const cacheKey = 'xit_chat_cache_' + room;
 
+            // 1. Load from Local Storage instantly
+            let cachedData = JSON.parse(localStorage.getItem(cacheKey));
+            if (cachedData) {
+                renderMessages(Object.values(cachedData), type);
+                setTimeout(() => { document.getElementById('msg-flow').scrollTop = document.getElementById('msg-flow').scrollHeight; }, 10);
+            }
+
+            let isInitialLoad = !cachedData; // Scroll only if no cache
+
+            // 2. Fetch from Firebase and update cache incrementally
             db.ref(refPath).on('value', snap => {
                 if(room !== activeRoom) return; 
-                const flow = document.getElementById('msg-flow'); flow.innerHTML = "";
-                snap.forEach(ms => {
-                    const m = ms.val(); m.key = ms.key;
-                    const wrap = document.createElement('div'); wrap.className = `msg-wrapper ${m.from === myUser ? 'sent-wrap' : 'recv-wrap'}`; wrap.id = `msg-wrap-${m.key}`;
-                    const bubble = document.createElement('div'); bubble.className = `bubble ${m.from === myUser ? 'sent' : 'recv'}`;
-                    
-                    let content = ''; 
-                    if(type === 'private' && m.from !== myUser) content += `<small style="display:block; font-weight:800; margin-bottom:5px; font-size:12px; color:var(--primary);">~ ${m.from}</small>`;
-                    if(m.replyTo) { let shortText = m.replyTo.type==='image'?'📷 Image':m.replyTo.type==='video'?'📹 Video':m.replyTo.type==='audio'?'🎵 Audio':m.replyTo.type==='document'?'📄 Document':escapeHTML(m.replyTo.data); content += `<div class="reply-block" onclick="document.getElementById('msg-wrap-${m.replyTo.key}').scrollIntoView({behavior:'smooth'})"><b style="color:var(--primary); font-weight:800;">${m.replyTo.from}</b><br><div style="font-size:12px; opacity:0.8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${shortText}</div></div>`; }
-                    
-                    if(m.type === 'image') content += `<img src="${m.data}" onclick="openMediaViewer('${m.data}', 'image')">`;
-                    else if(m.type === 'video') content += `<video src="${m.data}" controls></video><br><small style="cursor:pointer; color:var(--primary); font-weight:bold;" onclick="openMediaViewer('${m.data}', 'video')">⛶ Full Screen</small>`;
-                    else if(m.type === 'audio') content += `<audio src="${m.data}" controls></audio>`;
-                    else if(m.type === 'document') content += `<div style="background:rgba(255,255,255,0.05); padding:15px; border-radius:8px; margin-top:5px; display:flex; align-items:center; gap:10px;"><span style="font-size:24px;">📄</span><a href="${m.data}" target="_blank" style="color:inherit; font-weight:bold; flex:1; text-decoration:none;">👁️ View Document</a></div>`;
-                    else content += urlify(m.data); 
-                    
-                    content += `<div class="msg-time">${new Date(m.ts).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>`;
-                    bubble.innerHTML = content; wrap.appendChild(bubble); flow.appendChild(wrap);
-
-                    let startX = 0, isSwiping = false, pressTimer = null;
-                    bubble.addEventListener('touchstart', e => { startX = e.touches[0].clientX; isSwiping=false; pressTimer = setTimeout(() => { showMsgActionMenu(m); pressTimer=null; }, 500); }, {passive:true});
-                    bubble.addEventListener('touchmove', e => { let dx = e.touches[0].clientX - startX; if(Math.abs(dx) > 5 && pressTimer) clearTimeout(pressTimer); if(dx > 10 && dx < 100) { isSwiping = true; bubble.style.transform = `translateX(${dx}px)`; } }, {passive:true});
-                    bubble.addEventListener('touchend', e => { if(pressTimer) clearTimeout(pressTimer); let dx = e.changedTouches[0].clientX - startX; bubble.style.transform = 'translateX(0px)'; if(dx > 50 && isSwiping) setReplyContext(m); });
-                    bubble.addEventListener('mousedown', e => { pressTimer = setTimeout(() => { showMsgActionMenu(m); pressTimer=null; }, 500); });
-                    bubble.addEventListener('mousemove', () => { if(pressTimer) clearTimeout(pressTimer); });
-                    bubble.addEventListener('mouseup', e => { if(pressTimer) clearTimeout(pressTimer); });
-                    bubble.addEventListener('contextmenu', e => { e.preventDefault(); showMsgActionMenu(m); });
-                });
+                let messagesArr = [];
+                snap.forEach(ms => { let m = ms.val(); m.key = ms.key; messagesArr.push(m); });
                 
-                // If just opened, instantly jump to latest message without animated scrolling
-                if (isInitialLoad) {
-                    setTimeout(() => { 
-                        flow.scrollTop = flow.scrollHeight; 
-                        isInitialLoad = false; 
-                    }, 50);
+                // Save to local device
+                localStorage.setItem(cacheKey, JSON.stringify(messagesArr));
+
+                // Append only new messages to avoid full reload
+                const flow = document.getElementById('msg-flow');
+                const lastMsgKey = flow.lastElementChild ? flow.lastElementChild.id.replace('msg-wrap-', '') : null;
+                let lastMsgIndex = messagesArr.findIndex(m => m.key === lastMsgKey);
+
+                if (lastMsgIndex === -1 || messagesArr.length <= (lastMsgIndex + 1)) {
+                    // No new messages, or all messages are already loaded
+                    if (isInitialLoad) {
+                        renderMessages(messagesArr, type);
+                        setTimeout(() => { flow.scrollTop = flow.scrollHeight; isInitialLoad = false; }, 50);
+                    }
+                } else {
+                    // New messages arrived
+                    for (let i = lastMsgIndex + 1; i < messagesArr.length; i++) {
+                        renderSingleMessage(messagesArr[i], type, flow);
+                    }
+                    flow.scrollTop = flow.scrollHeight;
                 }
                 window.lastRead[room] = Date.now(); localStorage.setItem('xit_reads', JSON.stringify(window.lastRead));
             });
+        }
+
+        function renderMessages(messagesArr, type) {
+            const flow = document.getElementById('msg-flow'); 
+            flow.innerHTML = "";
+            messagesArr.sort((a, b) => a.ts - b.ts);
+            messagesArr.forEach(m => renderSingleMessage(m, type, flow));
+        }
+
+        function renderSingleMessage(m, type, container) {
+            const wrap = document.createElement('div'); wrap.className = `msg-wrapper ${m.from === myUser ? 'sent-wrap' : 'recv-wrap'}`; wrap.id = `msg-wrap-${m.key}`;
+            const bubble = document.createElement('div'); bubble.className = `bubble ${m.from === myUser ? 'sent' : 'recv'}`;
+            
+            let content = ''; 
+            if(type === 'private' && m.from !== myUser) content += `<small style="display:block; font-weight:800; margin-bottom:5px; font-size:12px; color:var(--primary);">~ ${m.from}</small>`;
+            if(m.replyTo) { let shortText = m.replyTo.type==='image'?'📷 Image':m.replyTo.type==='video'?'📹 Video':m.replyTo.type==='audio'?'🎵 Audio':m.replyTo.type==='document'?'📄 Document':escapeHTML(m.replyTo.data); content += `<div class="reply-block" onclick="document.getElementById('msg-wrap-${m.replyTo.key}').scrollIntoView({behavior:'smooth'})"><b style="color:var(--primary); font-weight:800;">${m.replyTo.from}</b><br><div style="font-size:12px; opacity:0.8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${shortText}</div></div>`; }
+            
+            if(m.type === 'image') content += `<img src="${m.data}" onclick="openMediaViewer('${m.data}', 'image')">`;
+            else if(m.type === 'video') content += `<video src="${m.data}" controls></video><br><small style="cursor:pointer; color:var(--primary); font-weight:bold;" onclick="openMediaViewer('${m.data}', 'video')">⛶ Full Screen</small>`;
+            else if(m.type === 'audio') content += `<audio src="${m.data}" controls></audio>`;
+            else if(m.type === 'document') content += `<div style="background:rgba(255,255,255,0.05); padding:15px; border-radius:8px; margin-top:5px; display:flex; align-items:center; gap:10px;"><span style="font-size:24px;">📄</span><a href="${m.data}" target="_blank" style="color:inherit; font-weight:bold; flex:1; text-decoration:none;">👁️ View Document</a></div>`;
+            else content += urlify(m.data); 
+            
+            content += `<div class="msg-time">${new Date(m.ts).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>`;
+            bubble.innerHTML = content; wrap.appendChild(bubble); container.appendChild(wrap);
+
+            let startX = 0, isSwiping = false, pressTimer = null;
+            bubble.addEventListener('touchstart', e => { startX = e.touches[0].clientX; isSwiping=false; pressTimer = setTimeout(() => { showMsgActionMenu(m); pressTimer=null; }, 500); }, {passive:true});
+            bubble.addEventListener('touchmove', e => { let dx = e.touches[0].clientX - startX; if(Math.abs(dx) > 5 && pressTimer) clearTimeout(pressTimer); if(dx > 10 && dx < 100) { isSwiping = true; bubble.style.transform = `translateX(${dx}px)`; } }, {passive:true});
+            bubble.addEventListener('touchend', e => { if(pressTimer) clearTimeout(pressTimer); let dx = e.changedTouches[0].clientX - startX; bubble.style.transform = 'translateX(0px)'; if(dx > 50 && isSwiping) setReplyContext(m); });
+            bubble.addEventListener('mousedown', e => { pressTimer = setTimeout(() => { showMsgActionMenu(m); pressTimer=null; }, 500); });
+            bubble.addEventListener('mousemove', () => { if(pressTimer) clearTimeout(pressTimer); });
+            bubble.addEventListener('mouseup', e => { if(pressTimer) clearTimeout(pressTimer); });
+            bubble.addEventListener('contextmenu', e => { e.preventDefault(); showMsgActionMenu(m); });
         }
 
         function showMsgActionMenu(mObj) { actionMsgContext = mObj; let html = `<button class="btn-secondary" onclick="setReplyContext(actionMsgContext); closeModal();">↩️ Reply</button><button class="btn-secondary" onclick="openForwardModal();">➡️ Forward</button>`; if(mObj.from === myUser) html += `<button class="btn-danger" onclick="deleteTargetMsg('${mObj.key}'); closeModal();">🗑️ Delete</button>`; showModal("Message Options", html, null, false); }
@@ -620,7 +653,7 @@
             toggleSidebar(false); db.ref(`call_history/${myUser}`).once('value', snap => { let html = `<div style="text-align:left; max-height: 60vh; overflow-y: auto; padding-right: 5px;">`; let data = []; if(snap.exists()) { snap.forEach(s => { data.push(s.val()) }); } data.sort((a,b) => b.ts - a.ts); if(data.length === 0) { html += `<p style="text-align:center; color:#777; padding: 20px 0;">No logs found in call history.</p>`; } data.forEach(c => { let d = new Date(c.ts); let timeStr = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); let icon = c.type === 'video' ? '📹' : '📞'; let col = c.status === 'missed' ? 'var(--danger)' : c.status === 'outgoing' ? 'var(--primary)' : '#38ef7d'; let arrow = c.status === 'missed' ? '↙️ Missed' : c.status === 'outgoing' ? '↗️ Outgoing' : '↙️ Received'; html += `<div class="history-row" style="margin-bottom:10px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); border-radius:15px; display:flex; align-items:center; padding:15px;"><div style="font-size:26px; margin-right:15px; color:${col}">${icon}</div><div style="flex:1;"><b style="color:${col}; font-size:16px;">${c.peer}</b><br><small style="color:#aaa;">${arrow}</small></div><div style="font-size:11px; color:#888; text-align:right;">${timeStr}</div></div>`; }); html += `</div>`; showModal("📞 Call History", html, null, false); }); 
         }
 
-        // --- CALLING LOGIC (Ringtones Removed, Vibration Added) ---
+        // --- CALLING LOGIC (Fixed Lag & Vibration) ---
         const iceServers = { iceServers: [{ urls: 'stun:stun1.l.google.com:19302' }, { urls: 'stun:stun2.l.google.com:19302' }]};
         let pc = null; let localStream = null; let remoteStream = null; let currentCallRef = null; 
         let isVideoCall = false; let incomingCallObj = null; let isFrontCamera = true; let isSpeakerOn = true; 
@@ -638,16 +671,21 @@
                 let constraints = { audio: true }; if (isVideoCall) constraints.video = { facingMode: "user" };
                 localStream = await navigator.mediaDevices.getUserMedia(constraints); document.getElementById('local-video').srcObject = localStream; isFrontCamera = true; 
                 let callScrn = document.getElementById('call-screen'); callScrn.style.display = 'flex'; document.getElementById('call-status-text').innerText = `Calling ${activePeerName}...`; document.getElementById('flip-cam-btn').style.display = isVideoCall ? 'flex' : 'none'; 
+                
                 if(isVideoCall) { document.getElementById('remote-video').style.display = 'block'; document.getElementById('local-video').style.display = 'block'; document.getElementById('audio-avatar-wrap').style.display = 'none'; } else { document.getElementById('remote-video').style.display = 'none'; document.getElementById('local-video').style.display = 'none'; document.getElementById('audio-avatar-wrap').style.display = 'flex'; document.getElementById('audio-avatar-letter').innerText = activePeerName[0].toUpperCase(); }
+                
                 pc = new RTCPeerConnection(iceServers); localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
                 remoteStream = new MediaStream(); document.getElementById('remote-video').srcObject = remoteStream;
                 pc.ontrack = event => { remoteStream.addTrack(event.track); document.getElementById('remote-video').play().catch(e=>console.log(e)); };
                 pc.onconnectionstatechange = () => { if (pc && pc.connectionState === 'connected') startCallTimerUI(); };
+                
                 const callId = db.ref(`incoming_calls/${activePeerName}`).push().key; currentCallRef = db.ref(`calls_signaling/${callId}`);
                 let callerQueue = []; pc.onicecandidate = event => { if(event.candidate && currentCallRef) currentCallRef.child('callerCandidates').push(event.candidate.toJSON()); };
                 const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
+                
                 await db.ref(`incoming_calls/${activePeerName}`).set({ caller: myUser, type: type, callId: callId, offer: { type: offer.type, sdp: offer.sdp }, ts: Date.now() });
                 localStorage.setItem('xit_active_call_role', 'outgoing');
+                
                 currentCallRef.child('answer').on('value', snap => { if(snap.exists() && pc && !pc.currentRemoteDescription) { pc.setRemoteDescription(new RTCSessionDescription(snap.val())).then(() => { callerQueue.forEach(c => pc.addIceCandidate(c)); callerQueue = []; }).catch(e=>console.log(e)); } });
                 currentCallRef.child('calleeCandidates').on('child_added', snap => { if(snap.exists() && pc) { let cand = new RTCIceCandidate(snap.val()); if(pc.remoteDescription) pc.addIceCandidate(cand); else callerQueue.push(cand); } });
                 currentCallRef.child('status').on('value', snap => { if(snap.val() === 'ended') { let finalDur = stopCallTimerUI(); let finalStat = finalDur === "00:00" ? "missed" : "outgoing"; saveCallHistory(activePeerName, type, finalStat); endCallLocal(); } });
@@ -660,7 +698,6 @@
                     if(!incomingCallObj) { 
                         incomingCallObj = snap.val(); 
                         
-                        // VIBRATION instead of Ringtone
                         if (navigator.vibrate) { navigator.vibrate([1000, 500, 1000, 500, 1000, 500, 1000]); }
                         notifyUser("Incoming Call", `Call from ${incomingCallObj.caller}`); 
                         
@@ -679,21 +716,37 @@
             try {
                 let constraints = { audio: true }; if (isVideoCall) constraints.video = { facingMode: "user" };
                 localStream = await navigator.mediaDevices.getUserMedia(constraints); document.getElementById('local-video').srcObject = localStream; isFrontCamera = true;
+                
                 let callScrn = document.getElementById('call-screen'); callScrn.style.display = 'flex'; document.getElementById('flip-cam-btn').style.display = isVideoCall ? 'flex' : 'none';
                 if(isVideoCall) { document.getElementById('remote-video').style.display = 'block'; document.getElementById('local-video').style.display = 'block'; document.getElementById('audio-avatar-wrap').style.display = 'none'; } else { document.getElementById('remote-video').style.display = 'none'; document.getElementById('local-video').style.display = 'none'; document.getElementById('audio-avatar-wrap').style.display = 'flex'; document.getElementById('audio-avatar-letter').innerText = data.caller[0].toUpperCase(); }
+                
                 pc = new RTCPeerConnection(iceServers); localStream.getTracks().forEach(track => pc.addTrack(track, localStream)); remoteStream = new MediaStream(); document.getElementById('remote-video').srcObject = remoteStream;
-                pc.ontrack = event => { remoteStream.addTrack(event.track); document.getElementById('remote-video').play().catch(e=>console.log(e)); }; pc.onconnectionstatechange = () => { if (pc && pc.connectionState === 'connected') startCallTimerUI(); };
+                pc.ontrack = event => { remoteStream.addTrack(event.track); document.getElementById('remote-video').play().catch(e=>console.log(e)); }; 
+                pc.onconnectionstatechange = () => { if (pc && pc.connectionState === 'connected') startCallTimerUI(); };
+                
                 let calleeQueue = []; pc.onicecandidate = event => { if(event.candidate && currentCallRef) currentCallRef.child('calleeCandidates').push(event.candidate.toJSON()); };
-                await pc.setRemoteDescription(new RTCSessionDescription(data.offer)); calleeQueue.forEach(c => pc.addIceCandidate(c)); calleeQueue = [];
+                await pc.setRemoteDescription(new RTCSessionDescription(data.offer)); 
+                calleeQueue.forEach(c => pc.addIceCandidate(c)); 
+                calleeQueue = [];
+                
                 const answer = await pc.createAnswer(); await pc.setLocalDescription(answer);
                 await currentCallRef.child('answer').set({ type: answer.type, sdp: answer.sdp });
+                
                 currentCallRef.child('callerCandidates').on('child_added', snap => { if(snap.exists() && pc) { let cand = new RTCIceCandidate(snap.val()); if(pc.remoteDescription) pc.addIceCandidate(cand); else calleeQueue.push(cand); } });
                 currentCallRef.child('status').on('value', snap => { if(snap.val() === 'ended') { stopCallTimerUI(); saveCallHistory(data.caller, data.type, 'received'); endCallLocal(); } });
                 db.ref(`incoming_calls/${myUser}`).remove(); incomingCallObj = null;
             } catch(e) { console.error(e); alert("Camera/Mic Permission Denied! Check browser settings."); rejectCall(); }
         }
 
-        function rejectCall() { document.getElementById('premium-call-layer').style.display = 'none'; if(incomingCallObj) { db.ref(`calls_signaling/${incomingCallObj.callId}/status`).set('ended'); db.ref(`incoming_calls/${myUser}`).remove(); saveCallHistory(incomingCallObj.caller, incomingCallObj.type, 'missed'); incomingCallObj = null; } }
+        function rejectCall() { 
+            document.getElementById('premium-call-layer').style.display = 'none'; 
+            if(incomingCallObj) { 
+                db.ref(`calls_signaling/${incomingCallObj.callId}/status`).set('ended'); 
+                db.ref(`incoming_calls/${myUser}`).remove(); 
+                saveCallHistory(incomingCallObj.caller, incomingCallObj.type, 'missed'); 
+                incomingCallObj = null; 
+            } 
+        }
         function endCall() { if(currentCallRef) currentCallRef.child('status').set('ended'); else endCallLocal(); }
 
         function endCallLocal() { 
@@ -703,7 +756,8 @@
             if(localStream) { localStream.getTracks().forEach(track => track.stop()); localStream = null; }
             if(remoteStream) { remoteStream.getTracks().forEach(track => track.stop()); remoteStream = null; }
             document.getElementById('call-screen').style.display = 'none'; document.getElementById('remote-video').srcObject = null; document.getElementById('local-video').srcObject = null; 
-            if(currentCallRef) { currentCallRef.off(); currentCallRef = null; } db.ref(`incoming_calls/${myUser}`).remove(); localStorage.removeItem('xit_active_call_role'); incomingCallObj = null;
+            if(currentCallRef) { currentCallRef.off(); currentCallRef = null; } 
+            db.ref(`incoming_calls/${myUser}`).remove(); localStorage.removeItem('xit_active_call_role'); incomingCallObj = null;
         }
         
         function toggleMute() { if(localStream) { let audioTrack = localStream.getAudioTracks()[0]; if(audioTrack) { audioTrack.enabled = !audioTrack.enabled; let btn = document.getElementById('toggle-mic-btn'); if(audioTrack.enabled) { btn.style.background = 'rgba(255,255,255,0.1)'; btn.style.color = 'white'; } else { btn.style.background = 'rgba(255,71,87,0.2)'; btn.style.color = 'var(--danger)'; } } } }
